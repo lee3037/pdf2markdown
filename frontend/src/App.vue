@@ -316,7 +316,8 @@ onUnmounted(() => {
           <FileText :size="16" /><span
             ><strong>{{ task.filename }}</strong
             ><small
-              >{{ task.pages }} 页 <i>·</i> {{ statusLabel(task) }}</small
+              >{{ task.pages }} 页 <i>·</i> {{ statusLabel(task) }} <i>·</i>
+              {{ task.mode === "remote" ? "MinerU" : "Mock" }}</small
             ></span
           ><span class="status-dot" :class="task.status"></span>
         </button>

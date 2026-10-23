@@ -18,6 +18,9 @@ test("upload, edit, rechunk, download both versions and reopen persisted work", 
   const editor = page.getByRole("textbox", { name: "Markdown 源码" });
   await expect(editor).toBeVisible();
   await expect(editor).toHaveValue(/固定示例/);
+  await expect(
+    page.locator(".history-item").filter({ hasText: "sample.pdf" }).first(),
+  ).toContainText("Mock");
   const draft =
     "# 本机测试\n\n## 第一章\n\n准确保留金额 100.50 元及编号 A-01。\n\n## 第二章\n\n另一条完整内容。\n";
   await editor.fill(draft);

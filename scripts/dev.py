@@ -27,9 +27,11 @@ def main():
     if local_node.exists():
         env["PATH"] = str(local_node) + os.pathsep + env.get("PATH", "")
     processes = []
+    stopping = False
 
     def stop(signum=None, frame=None):
-        raise KeyboardInterrupt
+        nonlocal stopping
+        stopping = True
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -40,8 +42,8 @@ def main():
             (["npm", "run", "dev", "--", "--port", str(args.web_port)], ROOT / "frontend"),
         ]:
             processes.append(subprocess.Popen(command, cwd=directory, env=env, start_new_session=True))
-        print(f"\n本机预览：http://127.0.0.1:{args.web_port} · M1 Mock 模式\n", flush=True)
-        while True:
+        print(f"\n本机预览：http://127.0.0.1:{args.web_port} · 工作模式见页面状态\n", flush=True)
+        while not stopping:
             for process in processes:
                 if process.poll() is not None:
                     raise RuntimeError(f"子服务意外退出，退出码 {process.returncode}")

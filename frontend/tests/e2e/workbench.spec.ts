@@ -9,7 +9,7 @@ test("upload, edit, rechunk, download both versions and reopen persisted work", 
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
   await expect(
-    page.getByText("M1 · Mock 演示模式", { exact: true }),
+    page.getByText("M2 · Mock 演示模式", { exact: true }),
   ).toBeVisible();
   await page.screenshot({ path: "test-results/m1-home.png", fullPage: true });
   await page
@@ -100,8 +100,14 @@ test("mobile upload screen fits the viewport and rejects unsupported files", asy
   );
   expect(fits).toBe(true);
   await page.getByRole("button", { name: "先用示例体验一下" }).click();
-  await expect(page.getByRole("textbox", { name: "Markdown 源码" })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect(
+    page.getByRole("textbox", { name: "Markdown 源码" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
 });
 
 test("download saves the latest unsaved edits", async ({ page }) => {

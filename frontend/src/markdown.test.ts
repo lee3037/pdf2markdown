@@ -23,4 +23,15 @@ describe("Markdown preview", () => {
       renderMarkdown("![private](https://example.com/track)"),
     ).not.toContain("<img");
   });
+  it("renders native HTML tables without retaining executable attributes or CSS fetches", () => {
+    const html = renderMarkdown(
+      '<table><tr><th colspan="2">费用</th></tr><tr><td style="background:url(https://example.com/track)" onclick="alert(1)">100.50</td><td>元</td></tr></table>',
+    );
+    expect(html).toContain("<table>");
+    expect(html).toContain('colspan="2"');
+    expect(html).toContain("100.50");
+    expect(html).not.toContain("style=");
+    expect(html).not.toContain("onclick");
+    expect(html).not.toContain("https://example.com/track");
+  });
 });

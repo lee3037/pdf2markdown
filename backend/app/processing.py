@@ -17,24 +17,29 @@ class ChunkOptions(BaseModel):
         return value
 
 
-def make_chunks(markdown: str, options: ChunkOptions):
+def make_chunks(markdown: str, options: ChunkOptions, source_note=None):
     if options.separator in markdown:
         raise ValueError("分隔符与正文冲突，请更换分隔符。")
     # Fenced code stays intact even when it contains heading-looking lines.
     units, lines, fence = [], [], None
+    html_table_depth = 0
     for line in markdown.splitlines():
         match = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if match:
+        if match and not html_table_depth:
             marker = match.group(1)
             if fence is None:
                 fence = marker
             elif marker[0] == fence[0] and len(marker) >= len(fence) and line.strip() == marker:
                 fence = None
-        if not line.strip() and fence is None:
+        inside_table = html_table_depth > 0
+        if fence is None:
+            html_table_depth = max(0, html_table_depth + len(re.findall(r"<table(?:\s|>)", line, re.I)) - len(re.findall(r"</table\s*>", line, re.I)))
+            inside_table = inside_table or html_table_depth > 0
+        if not line.strip() and fence is None and not inside_table:
             if lines:
                 units.append("\n".join(lines))
                 lines = []
-        elif re.match(r"^#{1,6}\s+", line) and fence is None:
+        elif re.match(r"^#{1,6}\s+", line) and fence is None and not inside_table:
             if lines:
                 units.append("\n".join(lines))
             units.append(line)
@@ -54,7 +59,7 @@ def make_chunks(markdown: str, options: ChunkOptions):
             if prefix:
                 content = prefix + "\n\n" + content
             if options.include_source:
-                content = "> 来源：M1 Mock 演示内容；未建立原 PDF 页码映射。\n\n" + content
+                content = "> 来源：" + (source_note or "M1 Mock 演示内容；未建立原 PDF 页码映射。") + "\n\n" + content
             results.append({"index": len(results) + 1, "markdown": content,
                             "section": " / ".join(title for _, title in headings) or "正文",
                             "characters": len(content), "oversized": len(content) > options.target_size})
@@ -90,5 +95,5 @@ def make_chunks(markdown: str, options: ChunkOptions):
     return results
 
 
-def export_chunked(markdown: str, options: ChunkOptions):
-    return ("\n\n" + options.separator + "\n\n").join(chunk["markdown"] for chunk in make_chunks(markdown, options))
+def export_chunked(markdown: str, options: ChunkOptions, source_note=None):
+    return ("\n\n" + options.separator + "\n\n").join(chunk["markdown"] for chunk in make_chunks(markdown, options, source_note))

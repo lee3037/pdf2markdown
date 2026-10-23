@@ -2,7 +2,48 @@
 
 面向知识库资料整理的 PDF 转 Markdown 网页工具。提供 PDF 上传、转换、原文对照、Markdown 编辑、分块预览和下载。下载结果可由用户自行导入 FastGPT 等知识库。
 
-当前状态：M1 基础闭环已实现，使用明确标识的固定 Mock 内容验证上传、任务、编辑、分块和下载。真实 MinerU 解析、OCR 质量与跨页表格尚未接入或验收。
+当前状态：M1 基础闭环已验收。M2 已实现 MinerU 3.1.1 原生协议适配、缓存、产物保存及恢复逻辑，但指定网关尚未返回有效 HTTP 响应，真实 PDF 转换验收仍被阻塞。M2 工作保存在 `feat/m2-mineru`，尚不能认定为已完成的真实转换版本。
+
+## M2 接入与当前阻塞
+
+已从 PyPI 官方 `mineru==3.1.1` wheel 核对原生接口源码（SHA-256：`465b4ffa2e08b005b9d527c019093342db2e5dedfdcfb729ea339a7651d18c12`）。这验证的是原生接口契约，不代表自定义 `app.py` 网关已经兼容。
+
+适配器启动真实任务前先读取配置地址的 `/openapi.json`：
+
+- 优先使用 `POST /tasks`、`GET /tasks/{task_id}`、`GET /tasks/{task_id}/result`。
+- 若只声明 `/file_parse`，使用 Worker 中的同步请求；提交响应中断时禁止自动重提。
+- 上传字段为 `files[]`，请求 Markdown、Middle JSON 和 Content List，要求 JSON 而非 ZIP 响应。
+- 保留服务声明的 backend 默认值；需要指定时才设置 `MINERU_BACKEND`。
+- 返回的回环地址、其他主机 URL 或本机磁盘路径不会被直接访问；任务查询使用已配置网关的规范路径，不跟随重定向转发凭据。
+- 未公开兼容 OpenAPI 的网关会在上传 PDF 前停止，必须先核对其路由再编写对应适配，不猜测自定义上传地址。
+
+配置本地 `.env`，真实地址和可选认证仅保存在此文件：
+
+~~~dotenv
+MINERU_MODE=remote
+MINERU_BASE_URL=http://<mineru-host>:19091
+# MINERU_API_KEY=（若网关要求 Bearer 认证，在本机填写）
+MINERU_PARSE_METHOD=auto
+MINERU_POLL_TIMEOUT=900
+~~~
+
+只读检查接口（不上传 PDF）：
+
+~~~sh
+uv run python scripts/probe_mineru.py
+~~~
+
+启动本机 API/Worker/前端后进行真实服务验收：
+
+~~~sh
+uv run python scripts/live_smoke.py
+# 对自备扫描 PDF，使用已知原文片段核对：
+uv run python scripts/live_smoke.py --pdf /path/to/scan.pdf --expect "已知原文"
+~~~
+
+真实验收脚本先检查工作模式和接口，只有检查成功才上传文件。结果写入被忽略的 `.local/live-smoke.json`；失败或受阻不计为通过。
+
+本轮针对指定网关的验收停在接口探测阶段：未取得有效 HTTP 响应、未向其提交 PDF、未取得真实解析输出。仍需 Windows 本机 `/openapi.json` 和 `/health` 的实际返回，以及 `app.py` 对外路由定义。网络、隧道、网关或服务端具体哪一层导致问题，目前没有足够证据判定。
 
 ## 本机启动
 
@@ -18,17 +59,23 @@ uv run python scripts/dev.py
 
 启动命令会一起运行 API、独立 Worker 和前端；按 Ctrl+C 一并停止。默认仅绑定本机回环地址。该启动脚本当前面向 macOS/Linux，Windows 服务部署留待后续阶段。
 
-端口占用时可使用 `uv run python scripts/dev.py --api-port 8010 --web-port 5180`。无需创建 `.env` 即可运行；自定义时复制 `.env.example` 为 `.env`。M1 设置 `MINERU_MODE=remote` 会明确拒绝启动，避免把演示输出误认为真实解析。
+端口占用时可使用 `uv run python scripts/dev.py --api-port 8010 --web-port 5180`。没有 `.env` 时默认 Mock；真实模式按上面的配置启动。网页顶部显示当前模式和服务检测结果；历史任务保留创建时的模式，远程失败不会回退到 Mock。
 
 ### 使用流程
 
 1. 上传 PDF，或点击“先用示例体验一下”。单文件默认最多 20 MB、200 页，拒绝损坏或加密 PDF。
 2. Worker 在后台处理；侧栏保存最近 100 个任务。服务重启后，已完成内容仍保留，中断任务标记失败并允许重试。
 3. 在源码编辑框中修改 Markdown，右侧阅读预览即时更新。
-4. 调整分隔符、目标字符数和可选的 Mock 来源说明，点击“保存并更新分块”。未保存时分块面板会提示其来自已保存版本。
+4. 调整分隔符、目标字符数和来源文件说明，点击“保存并更新分块”。未保存时分块面板会提示其来自已保存版本；M2 仍不伪造精确块级页码。
 5. 下载阅读版或知识库版。下载前自动保存当前修改；版本冲突或分隔符冲突会阻止覆盖与导出并显示错误。
 
-Mock 对任何有效 PDF 返回同一份固定示例，不提取 PDF 正文。PDF 上传和页数校验是真实执行的。原始 PDF 可通过“原始 PDF”打开；内嵌 PDF 对照和 Monaco 编辑器留待 M4，M1 使用原生文本编辑框。
+Mock 对任何有效 PDF 返回同一份固定示例，不提取 PDF 正文。remote 模式只接受实际服务返回的内容，当前指定网关尚未联调成功。原始 PDF 可通过“原始 PDF”打开；内嵌 PDF 对照和 Monaco 编辑器留待 M4。
+
+真实解析产物计划保存到 `data/<task-id>/artifacts/`：`raw.json` 保留原响应，`document.json` 保存统一结构与原始字段，`original.md` 保留未编辑正文。已有 M1 数据库自动增加所需列，不删除任务或已保存内容。
+
+异步任务 ID 在查询前持久化；Worker 重启后继续查询已有任务。查询超时可重试续查，提交结果不确定或任务已过期时需用户明确确认重提。只缓存成功解析的原始结果，不缓存人工编辑；缓存键包含文件哈希、服务来源、已知版本、接口指纹、参数、认证作用域摘要及可配置命名空间。服务版本未知时禁用缓存；更换模型但版本不变时应更新 `MINERU_CACHE_NAMESPACE`。
+
+M2 保留上游 HTML 表格并在预览中安全渲染；HTML→Markdown 表格规范化、长表切分、续表与语义复核属于 M3。图片引用不会自动加载，独立 `.md` 不携带图片文件，出现引用时显示限制说明。若服务只返回 Markdown，会明确标注缺少结构化信息。
 
 ### 本机验证
 
@@ -41,7 +88,7 @@ npx playwright install chromium
 npm run test:e2e
 ~~~
 
-浏览器测试自动使用 5174/8001 端口和临时数据目录，不复用预览工作区。机器已有 Microsoft Edge 时也可用 `PLAYWRIGHT_CHANNEL=msedge npm run test:e2e`，CI 默认使用 Chromium。自动检查工作流见 `.github/workflows/ci.yml`。
+浏览器测试自动使用 5174/8001 端口、Mock 工作模式和临时数据目录，不复用预览工作区。远程状态 UI 测试使用明确的 API 模拟，并非真实 OCR 验收。机器已有 Microsoft Edge 时也可用 `PLAYWRIGHT_CHANNEL=msedge npm run test:e2e`。自动检查工作流见 `.github/workflows/ci.yml`；真实服务验收需单独运行。
 
 `.tools/` 若存在，仅用于当前开发机的工具引导，不是项目依赖，不提交仓库。项目环境使用 `uv.lock` 和 `frontend/package-lock.json`；启动脚本不会更换系统 Python。
 
@@ -128,7 +175,7 @@ data/                    本地运行数据，不提交
 | 阶段 | 交付 | 验收 |
 | --- | --- | --- |
 | M1 基础闭环 | 已实现：工程、Mock、上传、持久化任务、编辑预览、基础分块、两种下载 | 离线单元及端到端验证，结果见阶段测试摘要 |
-| M2 MinerU 联调 | 3.1.1 网关适配、结构化输出、超时及错误处理、缓存 | 文本/扫描 PDF 实测，记录实际可用接口与后端配置 |
+| M2 MinerU 联调 | 已实现原生协议适配、结构化输出保存、超时/恢复和缓存；实际网关待核实 | 真实服务验收受阻，文本和扫描 PDF 尚未取得真实输出 |
 | M3 结构与分块 | 标题上下文、清洗、列表保护、表格转换、长表分块及续表复核 | 合成样例覆盖内容丢失、顺序、表头、页码和分隔符边界 |
 | M4 完整验收 | PDF 对照、编辑来源标记、重启恢复、回归、启动说明 | 本机浏览器完整流程通过，报告性能和已知限制 |
 

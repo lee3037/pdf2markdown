@@ -21,7 +21,13 @@ import {
   RotateCcw,
   Save,
 } from "@lucide/vue";
-import { api, type Health, type Options, type Task } from "./api";
+import {
+  api,
+  type Health,
+  type Options,
+  type Task,
+  type MinerUStatus,
+} from "./api";
 import { renderMarkdown } from "./markdown";
 
 const tasks = ref<Task[]>([]);
@@ -33,6 +39,11 @@ const options = ref<Options>({
   include_source: false,
 });
 const health = ref<Health | null>(null);
+const service = ref<MinerUStatus | null>(null);
+const checkingService = ref(false);
+const displayMode = computed(
+  () => active.value?.mode || health.value?.mode || "mock",
+);
 const tab = ref<"reading" | "chunks">("reading");
 const busy = ref(false);
 const saving = ref(false);
@@ -67,6 +78,21 @@ function hydrate(task: Task) {
 }
 async function refreshTasks() {
   tasks.value = await api<Task[]>("/tasks");
+}
+async function checkService() {
+  if (checkingService.value) return;
+  checkingService.value = true;
+  try {
+    service.value = await api<MinerUStatus>("/mineru/status");
+  } catch (e) {
+    service.value = {
+      available: false,
+      mode: "remote",
+      message: (e as Error).message,
+    };
+  } finally {
+    checkingService.value = false;
+  }
 }
 async function poll() {
   try {
@@ -208,10 +234,22 @@ async function download(variant: "reading" | "chunked") {
 }
 async function retry() {
   if (!active.value) return;
+  const needsConfirmation =
+    active.value.submission_started ||
+    active.value.error_code === "upstream_expired";
+  if (
+    needsConfirmation &&
+    !window.confirm(
+      "上游可能已接收文件，或原任务已过期。重新提交可能产生重复任务，确定继续吗？",
+    )
+  )
+    return;
   try {
     hydrate(
       await api<Task>("/tasks/" + active.value.id + "/retry", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allow_resubmit: needsConfirmation }),
       }),
     );
     error.value = "";
@@ -229,6 +267,7 @@ onMounted(async () => {
   window.addEventListener("beforeunload", beforeUnload);
   try {
     health.value = await api<Health>("/health");
+    if (health.value.mode === "remote") void checkService();
     await refreshTasks();
   } catch (e) {
     error.value = (e as Error).message;
@@ -285,7 +324,7 @@ onUnmounted(() => {
       <div class="sidebar-bottom">
         <span class="local-dot"></span
         ><span>本地工作空间<small>文件保存在这台电脑</small></span
-        ><span class="version">M1</span>
+        ><span class="version">M2</span>
       </div>
     </aside>
     <button
@@ -313,14 +352,58 @@ onUnmounted(() => {
         >
       </header>
       <div class="content">
-        <div class="mock-banner">
+        <div
+          class="mock-banner"
+          :class="{ 'remote-banner': displayMode === 'remote' }"
+        >
           <FlaskConical :size="17" /><span
-            ><strong>M1 · Mock 演示模式</strong
-            ><span class="banner-detail"
-              >使用固定示例验证操作流程，未调用 MinerU，不识别上传 PDF
-              正文。</span
-            ></span
+            ><strong>{{
+              displayMode === "remote"
+                ? "M2 · MinerU 远程解析"
+                : "M2 · Mock 演示模式"
+            }}</strong
+            ><span class="banner-detail">{{
+              displayMode === "remote"
+                ? "上传的 PDF 将交给解析服务处理；失败时不会使用演示内容替代。"
+                : "使用固定示例验证操作流程，未调用 MinerU，不识别上传 PDF 正文。"
+            }}</span></span
           ><span class="outline-tag">开发预览</span>
+        </div>
+        <div
+          v-if="health?.mode === 'remote'"
+          class="service-box"
+          :class="{ unavailable: service && !service.available }"
+          role="status"
+        >
+          <span
+            ><strong>{{
+              checkingService
+                ? "正在核实解析服务…"
+                : service?.available
+                  ? "解析接口已核实"
+                  : "解析服务尚不可用"
+            }}</strong
+            ><small
+              >{{ service?.message || "正在检查服务接口契约。"
+              }}<template v-if="service?.available">
+                · {{ service.version }} ·
+                {{
+                  service.style === "async" ? "异步任务" : "同步解析"
+                }}</template
+              ></small
+            ></span
+          >
+          <button
+            class="button secondary"
+            :disabled="checkingService"
+            @click="checkService"
+          >
+            <LoaderCircle
+              v-if="checkingService"
+              class="spin"
+              :size="14"
+            /><RotateCcw v-else :size="14" /> 检测解析服务
+          </button>
         </div>
         <div v-if="error" class="message error" role="alert">
           <AlertCircle :size="17" /><span>{{ error }}</span
@@ -460,8 +543,15 @@ onUnmounted(() => {
               <p>
                 {{ active.pages }} 页 <span>·</span>
                 {{ (active.size / 1024).toFixed(1) }} KB <span>·</span>
-                <strong class="mock-text">Mock 示例输出</strong
+                <strong class="mock-text">{{
+                  active.mode === "remote"
+                    ? completed
+                      ? "MinerU 实际输出"
+                      : "MinerU 远程任务"
+                    : "Mock 示例输出"
+                }}</strong
                 ><span v-if="active.edited"> · 已人工编辑</span>
+                <span v-if="active.metadata?.cached"> · 复用解析缓存</span>
               </p>
             </div>
             <a
@@ -482,7 +572,9 @@ onUnmounted(() => {
             <p>
               {{
                 active.error ||
-                "演示 Worker 正在准备固定示例内容，上传的 PDF 不会被识别。"
+                (active.mode === "remote"
+                  ? "PDF 正在交由解析服务处理，请保留此任务。"
+                  : "演示 Worker 正在准备固定示例内容，上传的 PDF 不会被识别。")
               }}
             </p>
             <div class="progress-track">
@@ -494,10 +586,38 @@ onUnmounted(() => {
               class="button primary"
               @click="retry"
             >
-              <RotateCcw :size="16" /> 重试任务</button
+              <RotateCcw :size="16" />
+              {{
+                active.submission_started ||
+                active.error_code === "upstream_expired"
+                  ? "确认重新提交"
+                  : active.upstream_id &&
+                      active.error_code !== "upstream_task_failed"
+                    ? "继续查询结果"
+                    : "重试任务"
+              }}</button
             ><small v-else>长时间排队？请确认已运行本地 Worker。</small>
           </section>
           <template v-else>
+            <div v-if="active.mode === 'remote'" class="result-info">
+              <span
+                >MinerU {{ active.metadata?.producer_version || "版本未知" }} ·
+                {{ active.metadata?.backend || "后端未知" }} ·
+                {{
+                  active.metadata?.structured
+                    ? "结构化结果已保留"
+                    : "仅 Markdown"
+                }}<template v-if="active.metadata?.block_count">
+                  · {{ active.metadata.block_count }} 个结构块</template
+                ></span
+              >
+              <p
+                v-for="warning in active.metadata?.warnings || []"
+                :key="warning"
+              >
+                {{ warning }}
+              </p>
+            </div>
             <div class="editor-toolbar">
               <div class="editor-state">
                 <span class="local-dot" :class="{ unsaved: dirty }"></span
@@ -583,7 +703,7 @@ onUnmounted(() => {
                       v-html="renderMarkdown(chunk.markdown)"
                     ></div>
                     <p v-if="chunk.oversized" class="oversized">
-                      完整段落或表格超过软目标，M1 保留其完整性。
+                      完整段落或表格超过软目标，当前保留其完整性。
                     </p>
                   </article>
                 </div>
@@ -610,18 +730,23 @@ onUnmounted(() => {
                     step="100" /></label
                 ><label class="checkbox-label"
                   ><input v-model="options.include_source" type="checkbox" />
-                  添加 Mock 来源说明</label
+                  {{
+                    active.mode === "remote"
+                      ? "添加来源文件说明"
+                      : "添加 Mock 来源说明"
+                  }}</label
                 >
               </div>
               <p>
-                目标大小为软限制；M1 不提供真实页码、语义拆分或跨页表格合并。
+                目标大小为软限制；当前知识块未验证精确页码，语义细分与跨页表格复核留待
+                M3。
               </p>
             </section>
           </template>
         </template>
         <footer>
           <span>纸页，让文档回归内容。</span
-          ><span>本地优先 <i>·</i> M1 开发预览</span>
+          ><span>本地优先 <i>·</i> M2 开发预览</span>
         </footer>
       </div>
     </main>

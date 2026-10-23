@@ -25,12 +25,33 @@ export interface Task {
   revision: number;
   edited: boolean;
   error: string | null;
+  error_code: string | null;
+  mode: "mock" | "remote";
+  upstream_id: string | null;
+  submission_started: boolean;
+  metadata: {
+    structured?: boolean;
+    block_count?: number;
+    producer_version?: string;
+    backend?: string;
+    cached?: boolean;
+    elapsed_seconds?: number;
+    warnings?: string[];
+  };
   chunks?: Chunk[];
 }
 export interface Health {
   mode: string;
   max_upload_mb: number;
   max_pdf_pages: number;
+}
+
+export interface MinerUStatus {
+  available: boolean;
+  mode: string;
+  version?: string;
+  style?: string;
+  message: string;
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

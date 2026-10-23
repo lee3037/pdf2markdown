@@ -1,4 +1,5 @@
 import re
+import hashlib
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote
@@ -13,6 +14,7 @@ from .config import Settings, load_settings
 from .mock import sample_pdf
 from .processing import ChunkOptions, export_chunked, make_chunks
 from .store import Store
+from .mineru.client import MinerUClient, MinerUError
 
 
 class SaveRequest(ChunkOptions):
@@ -20,10 +22,14 @@ class SaveRequest(ChunkOptions):
     revision: int = Field(ge=1)
 
 
+class RetryRequest(BaseModel):
+    allow_resubmit: bool = False
+
+
 def create_app(settings: Settings | None = None):
     settings = settings or load_settings()
     store = Store(settings)
-    app = FastAPI(title="PDF to Markdown · M1 Mock", version="0.1.0")
+    app = FastAPI(title="PDF to Markdown", version="0.2.0")
     app.state.store = store
 
     def required(task_id):
@@ -32,9 +38,17 @@ def create_app(settings: Settings | None = None):
             raise HTTPException(404, "任务不存在。")
         return task
 
+    def public(task):
+        return {key: value for key, value in task.items() if key not in {"parse_profile", "input_sha256", "cache_key"}}
+
+    def source_note(task):
+        if task["mode"] == "mock":
+            return None
+        return task["filename"] + ("；已人工编辑，当前知识块未验证精确页码。" if task["edited"] else "；MinerU 解析，当前知识块未验证精确页码。")
+
     def detail(task):
-        task["mode"] = "mock"
-        task["chunks"] = make_chunks(task["markdown"], ChunkOptions(**task["settings"])) if task["markdown"] else []
+        task = public(task)
+        task["chunks"] = make_chunks(task["markdown"], ChunkOptions(**task["settings"]), source_note(task)) if task["markdown"] else []
         return task
 
     async def accept(filename: str, content: bytes):
@@ -63,7 +77,7 @@ def create_app(settings: Settings | None = None):
         source = directory / "source.pdf"
         try:
             source.write_bytes(content)
-            store.create(task_id, name, pages, len(content))
+            store.create(task_id, name, pages, len(content), hashlib.sha256(content).hexdigest())
         except Exception:
             source.unlink(missing_ok=True)
             directory.rmdir()
@@ -72,13 +86,27 @@ def create_app(settings: Settings | None = None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "mode": "mock", "version": "0.1.0", "max_upload_mb": settings.max_upload_mb,
+        return {"status": "ok", "mode": settings.mode, "version": "0.2.0", "max_upload_mb": settings.max_upload_mb,
                 "max_pdf_pages": settings.max_pdf_pages,
-                "notice": "M1 Mock 演示；未调用 MinerU，不识别上传 PDF 正文。"}
+                "notice": "Mock 演示；未调用 MinerU，不识别上传 PDF 正文。" if settings.mode == "mock" else "远程解析模式；仅成功任务代表已取得 MinerU 实际输出。"}
+
+    @app.get("/api/mineru/status")
+    def mineru_status():
+        if settings.mode != "remote":
+            return {"available": False, "mode": "mock", "message": "当前为 Mock 模式，不请求远程解析服务。"}
+        client = MinerUClient(settings)
+        try:
+            contract = client.discover()
+            return {"available": True, "mode": "remote", "version": contract.version or "unknown",
+                    "style": contract.style, "message": "接口契约已核实；实际识别能力以转换任务结果为准。"}
+        except MinerUError as exc:
+            return {"available": False, "mode": "remote", "code": exc.code, "message": str(exc)}
+        finally:
+            client.close()
 
     @app.get("/api/tasks")
     def tasks():
-        return [{key: value for key, value in task.items() if key != "markdown"} for task in store.list()]
+        return [{key: value for key, value in public(task).items() if key != "markdown"} for task in store.list()]
 
     @app.post("/api/tasks", status_code=202)
     async def upload(file: UploadFile):
@@ -115,9 +143,11 @@ def create_app(settings: Settings | None = None):
         return detail(required(task_id))
 
     @app.post("/api/tasks/{task_id}/retry", status_code=202)
-    def retry(task_id: str):
-        required(task_id)
-        if not store.retry(task_id):
+    def retry(task_id: str, request: RetryRequest | None = None):
+        task = required(task_id)
+        if (task["submission_started"] or task["error_code"] == "upstream_expired") and not (request and request.allow_resubmit):
+            raise HTTPException(409, "上游可能已接收文件或任务已过期，请确认重新提交后再重试。")
+        if not store.retry(task_id, request.allow_resubmit if request else False):
             raise HTTPException(409, "只有失败或中断的任务可以重试。")
         return detail(required(task_id))
 
@@ -135,7 +165,7 @@ def create_app(settings: Settings | None = None):
             raise HTTPException(409, "任务尚未完成。")
         markdown = task["markdown"]
         if variant == "chunked":
-            markdown = export_chunked(markdown, ChunkOptions(**task["settings"]))
+            markdown = export_chunked(markdown, ChunkOptions(**task["settings"]), source_note(task))
         name = Path(task["filename"]).stem + (".chunked.md" if variant == "chunked" else ".md")
         return Response(markdown, media_type="text/markdown; charset=utf-8", headers={
             "Content-Disposition": "attachment; filename*=UTF-8''" + quote(name),

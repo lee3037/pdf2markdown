@@ -1,6 +1,6 @@
 [project]
 name = "pdf2markdown"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local PDF to Markdown workbench"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -10,10 +10,11 @@ dependencies = [
   "python-dotenv>=1.0,<2",
   "pypdf>=6,<7",
   "filelock>=3.18,<4",
+  "httpx>=0.28,<1",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8,<10", "httpx>=0.28,<1"]
+dev = ["pytest>=8,<10"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

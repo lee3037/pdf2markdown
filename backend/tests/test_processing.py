@@ -51,6 +51,14 @@ def test_mock_source_does_not_invent_page_numbers():
     assert "未建立原 PDF 页码映射" in chunk["markdown"]
 
 
-def test_remote_mode_is_not_silently_mocked(tmp_path):
-    with pytest.raises(ValueError, match="M1 仅支持"):
+def test_remote_mode_requires_an_explicit_service_address(tmp_path):
+    with pytest.raises(ValueError, match="MINERU_BASE_URL"):
         Settings(data_dir=tmp_path, mode="remote")
+
+
+def test_native_html_table_with_blank_lines_remains_one_complete_unit():
+    table = '<table>\n<tr><th>费用</th></tr>\n\n<tr><td>' + '100.50 元；' * 25 + '</td></tr>\n</table>'
+    chunks = make_chunks('# 表格\n\n' + table + '\n\n表外说明。', ChunkOptions(target_size=100))
+    assert len(chunks) == 2
+    assert table in chunks[0]['markdown'] and chunks[0]['oversized']
+    assert '表外说明' in chunks[1]['markdown']

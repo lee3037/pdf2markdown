@@ -2,7 +2,48 @@
 
 面向知识库资料整理的 PDF 转 Markdown 网页工具。提供 PDF 上传、转换、原文对照、Markdown 编辑、分块预览和下载。下载结果可由用户自行导入 FastGPT 等知识库。
 
-当前状态：开发方案与仓库约定已建立，业务功能尚未实现。本文中的目录、接口和命令约定属于后续实施设计。
+当前状态：M1 基础闭环已实现，使用明确标识的固定 Mock 内容验证上传、任务、编辑、分块和下载。真实 MinerU 解析、OCR 质量与跨页表格尚未接入或验收。
+
+## 本机启动
+
+需要 Python 3.12（可由 uv 自动安装）、Node.js 24 LTS 和 npm。先安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)，Node 版本可使用 `.nvmrc` 管理。
+
+~~~sh
+uv sync --locked
+npm --prefix frontend ci
+uv run python scripts/dev.py
+~~~
+
+打开 http://127.0.0.1:5173/ 。API 位于 http://127.0.0.1:8000/api/health，接口文档位于 http://127.0.0.1:8000/docs。
+
+启动命令会一起运行 API、独立 Worker 和前端；按 Ctrl+C 一并停止。默认仅绑定本机回环地址。该启动脚本当前面向 macOS/Linux，Windows 服务部署留待后续阶段。
+
+端口占用时可使用 `uv run python scripts/dev.py --api-port 8010 --web-port 5180`。无需创建 `.env` 即可运行；自定义时复制 `.env.example` 为 `.env`。M1 设置 `MINERU_MODE=remote` 会明确拒绝启动，避免把演示输出误认为真实解析。
+
+### 使用流程
+
+1. 上传 PDF，或点击“先用示例体验一下”。单文件默认最多 20 MB、200 页，拒绝损坏或加密 PDF。
+2. Worker 在后台处理；侧栏保存最近 100 个任务。服务重启后，已完成内容仍保留，中断任务标记失败并允许重试。
+3. 在源码编辑框中修改 Markdown，右侧阅读预览即时更新。
+4. 调整分隔符、目标字符数和可选的 Mock 来源说明，点击“保存并更新分块”。未保存时分块面板会提示其来自已保存版本。
+5. 下载阅读版或知识库版。下载前自动保存当前修改；版本冲突或分隔符冲突会阻止覆盖与导出并显示错误。
+
+Mock 对任何有效 PDF 返回同一份固定示例，不提取 PDF 正文。PDF 上传和页数校验是真实执行的。原始 PDF 可通过“原始 PDF”打开；内嵌 PDF 对照和 Monaco 编辑器留待 M4，M1 使用原生文本编辑框。
+
+### 本机验证
+
+~~~sh
+uv run pytest -q
+npm --prefix frontend test
+npm --prefix frontend run build
+cd frontend
+npx playwright install chromium
+npm run test:e2e
+~~~
+
+浏览器测试自动使用 5174/8001 端口和临时数据目录，不复用预览工作区。机器已有 Microsoft Edge 时也可用 `PLAYWRIGHT_CHANNEL=msedge npm run test:e2e`，CI 默认使用 Chromium。自动检查工作流见 `.github/workflows/ci.yml`。
+
+`.tools/` 若存在，仅用于当前开发机的工具引导，不是项目依赖，不提交仓库。项目环境使用 `uv.lock` 和 `frontend/package-lock.json`；启动脚本不会更换系统 Python。
 
 ## 范围
 
@@ -18,14 +59,14 @@
 
 浏览器 → 本机 Vue 前端 → 本机 FastAPI → Windows 上的 MinerU 外部服务。
 
-- 前端：Vue 3、TypeScript、Vite；PDF.js 用于 PDF 对照，Monaco 用于源码编辑。
+- 前端：Vue 3、TypeScript、Vite；M1 使用原生文本编辑框和安全 Markdown 渲染，PDF.js 对照、Monaco 属于后续增强。
 - 后端：Python 3.12、FastAPI、HTTPX；SQLite 保存任务和编辑版本。
 - 任务执行：独立单 Worker，使用 SQLite 持久化队列；API 请求不等待整份 PDF 解析完成。
 - 本地文件：保存在忽略提交的 `data/` 目录，记录原始 PDF、解析产物和编辑结果。
 - 开发端口暂定前端 `127.0.0.1:5173`、API `127.0.0.1:8000`，占用时可配置。
 - 首期无需 Docker、Redis、Celery；后续按并发与部署需要扩展。
 
-建议项目使用 Python 3.12 和 Node.js 24 LTS，依赖通过 `uv.lock`、`package-lock.json` 锁定。建立功能代码时再补齐环境安装及启动命令。
+项目使用 Python 3.12 和 Node.js 24 LTS，依赖通过 `uv.lock`、`frontend/package-lock.json` 锁定。
 
 ## MinerU 接入
 
@@ -67,7 +108,7 @@
 - 人工编辑导致原文映射不再精确时，标记已修改，不伪造精确来源位置。
 - Markdown/HTML 预览需清理不可信 HTML，避免文档中的脚本执行。
 
-## 计划目录
+## 目录
 
 ~~~text
 frontend/                 网页与交互测试
@@ -77,7 +118,7 @@ backend/app/processing/   清洗、表格、分块和导出
 backend/app/worker/       持久化任务执行
 backend/tests/            后端和结构处理回归测试
 tests/fixtures/           可公开的合成样例和预期结果
-tests/e2e/                浏览器端到端测试
+frontend/tests/e2e/       浏览器端到端测试
 docs/test-reports/        脱敏后的阶段测试摘要
 data/                    本地运行数据，不提交
 ~~~
@@ -86,7 +127,7 @@ data/                    本地运行数据，不提交
 
 | 阶段 | 交付 | 验收 |
 | --- | --- | --- |
-| M1 基础闭环 | 工程初始化、Mock 解析、上传、任务状态、编辑预览、两种下载 | 无需远程服务即可完整演示；下载内容与编辑结果一致 |
+| M1 基础闭环 | 已实现：工程、Mock、上传、持久化任务、编辑预览、基础分块、两种下载 | 离线单元及端到端验证，结果见阶段测试摘要 |
 | M2 MinerU 联调 | 3.1.1 网关适配、结构化输出、超时及错误处理、缓存 | 文本/扫描 PDF 实测，记录实际可用接口与后端配置 |
 | M3 结构与分块 | 标题上下文、清洗、列表保护、表格转换、长表分块及续表复核 | 合成样例覆盖内容丢失、顺序、表头、页码和分隔符边界 |
 | M4 完整验收 | PDF 对照、编辑来源标记、重启恢复、回归、启动说明 | 本机浏览器完整流程通过，报告性能和已知限制 |

@@ -42,3 +42,6 @@ tests/fixtures/private/
 .vscode/
 .tools/
 .local/
+
+# Local reference copy of a separate production service; never publish its config/data.
+/omp-doc-convert/

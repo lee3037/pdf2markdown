@@ -212,6 +212,17 @@ def test_custom_gateway_is_rejected_before_sending_a_pdf(remote):
     assert gateway.submissions == 0
 
 
+def test_observed_convert_gateway_requires_its_actual_contract(remote):
+    store, gateway = Store(remote), Gateway()
+    gateway.schema = {"paths": {"/convert/submit": {"post": {}}, "/convert/task/{task_id}": {"get": {}}}}
+    task = queue(store)
+    run(store, gateway)
+    failed = store.get(task["id"])
+    assert failed["error_code"] == "unsupported_contract"
+    assert "已连接自定义转换网关" in failed["error"]
+    assert gateway.submissions == 0
+
+
 def test_m1_database_migrates_without_losing_work(tmp_path):
     path = tmp_path / "tasks.sqlite3"
     db = sqlite3.connect(path)

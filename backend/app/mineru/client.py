@@ -109,6 +109,8 @@ class MinerUClient:
         elif has_operation("/file_parse", "post"):
             style = "sync"
         if style is None:
+            if has_operation("/convert/submit", "post") and has_operation("/convert/task/{task_id}", "get"):
+                raise MinerUError("unsupported_contract", "已连接自定义转换网关，但其 OpenAPI 未提供可适配的上传与结果契约；请核实 app.py 的提交认证、上传字段和任务结果格式。")
             raise MinerUError("unsupported_contract", "网关未公开可识别的 MinerU 3.x 接口，请核实 app.py 路由。")
         operation = paths["/tasks" if style == "async" else "/file_parse"]["post"]
         request = resolve_ref(schema, operation.get("requestBody", {}))

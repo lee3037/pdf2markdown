@@ -2,53 +2,52 @@
 
 面向知识库资料整理的 PDF 转 Markdown 网页工具。提供 PDF 上传、转换、原文对照、Markdown 编辑、分块预览和下载。下载结果可由用户自行导入 FastGPT 等知识库。
 
-当前状态：M1 基础闭环已验收。M2 已实现 MinerU 3.1.1 原生协议适配、缓存、产物保存及恢复逻辑，2026-10-24 已恢复网关 HTTP 连通，核实其为自定义 `/convert/*` API；上传需要提交密钥且未公开参数契约，真实 PDF 转换验收仍被阻塞。M2 工作保存在 `feat/m2-mineru`，尚不能认定为已完成的真实转换版本。
+当前状态：M1 基础闭环已验收。M2 已实现原生协议适配和独立 19092 纯解析网关，含独立环境、认证、持久化队列、恢复与 Windows 部署脚本；目标 Windows 的 58666 实例尚未核实，新网关待部署，真实 PDF 转换仍未完成验收。工作分支为 `feat/m2-mineru`。
 
-## M2 接入与当前阻塞
+## M2：独立纯解析网关
 
-2026-10-24 补充检查了现有 OMP 服务源码：19091 是带专用业务后处理与回调的服务，不适合直接作为本工具的纯解析入口。推荐保留旧服务，另建独立纯解析网关；详见 [服务隔离方案](docs/mineru-service-isolation.md)。该方案尚未部署，以下记录仍代表已完成的接口探测结果。
+现有 OMP 19091 服务包含故障/参数专项处理和业务回调，本工具不再直接接入该业务提交入口。新网关位于 [gateway/](gateway/README.md)，代码、环境、认证、数据库、文件和启动进程均独立，不导入或修改 OMP 项目。
 
-已从 PyPI 官方 `mineru==3.1.1` wheel 核对原生接口源码（SHA-256：`465b4ffa2e08b005b9d527c019093342db2e5dedfdcfb729ea339a7651d18c12`）。这验证的是原生接口契约，不代表自定义 `app.py` 网关已经兼容。
+```text
+本机网页 → 本机 API/Worker → Windows 新网关 19092 → 回环 MinerU API 58666
+现有 OMP → 19091 → 现有 MinerU CLI / 专项处理 / 回调（保持原样）
+```
 
-适配器启动真实任务前先读取配置地址的 `/openapi.json`：
+- [Windows 部署与启动说明](gateway/README.md)：独立安装、原生接口只读核实、启动、认证检查、异常恢复与回滚。
+- [隔离方案与资源边界](docs/mineru-service-isolation.md)：新网关串行处理不代表整机全局串行，共用 GPU 的性能隔离仍需资源或运行窗口安排。
+- [本轮开发测试摘要](docs/test-reports/2026-10-24-m2-gateway.md)：区分离线测试、本机真实 HTTP 冒烟和真实引擎验收。
 
-- 优先使用 `POST /tasks`、`GET /tasks/{task_id}`、`GET /tasks/{task_id}/result`。
-- 若只声明 `/file_parse`，使用 Worker 中的同步请求；提交响应中断时禁止自动重提。
-- 上传字段为 `files[]`，请求 Markdown、Middle JSON 和 Content List，要求 JSON 而非 ZIP 响应。
-- 保留服务声明的 backend 默认值；需要指定时才设置 `MINERU_BACKEND`。
-- 返回的回环地址、其他主机 URL 或本机磁盘路径不会被直接访问；任务查询使用已配置网关的规范路径，不跟随重定向转发凭据。
-- 未公开兼容 OpenAPI 的网关会在上传 PDF 前停止，必须先核对其路由再编写对应适配，不猜测自定义上传地址。
+Windows 先运行 `gateway/windows/setup.ps1` 和 `check-upstream.ps1`，后者只读取 **Windows 本机** 58666 的 OpenAPI/health；接口或版本不符则停止。核实通过后按部署说明配置独立网关并启动 `start.ps1`。Mac 无法直接读取 Windows 回环监听，不能以官方源码或模拟响应替代实际实例检查。
 
-配置本地 `.env`，真实地址和可选认证仅保存在此文件：
+配置 Mac 本地 `.env`（不入库）：
 
 ~~~dotenv
 MINERU_MODE=remote
-MINERU_BASE_URL=http://<mineru-host>:19091
-# MINERU_API_KEY=（若网关要求 Bearer 认证，在本机填写）
+MINERU_BASE_URL=http://<Windows-host>:19092
+MINERU_API_KEY=<独立网关生成的 GATEWAY_TOKEN>
 MINERU_PARSE_METHOD=auto
 MINERU_POLL_TIMEOUT=900
 ~~~
 
-只读检查接口（不上传 PDF）：
+原生协议适配器先核实 OpenAPI，优先异步 `/tasks`，兼容实际声明的原生 `/file_parse` 同步入口。独立网关目前仅支持经过核实的原生异步 API，固定请求原始 Markdown 和结构化 JSON，不执行专用业务后处理，也不向其他主机转发密钥或跟随上游链接。
+
+重启本机 API/Worker/前端后执行：
 
 ~~~sh
 uv run python scripts/probe_mineru.py
+uv run python scripts/live_smoke.py --pdf tests/fixtures/live-text.pdf --expect ORCHID-4827
+uv run python scripts/live_smoke.py --pdf tests/fixtures/live-scan.pdf --expect ORCHID-4827
 ~~~
 
-启动本机 API/Worker/前端后进行真实服务验收：
+真实验收脚本先检查工作模式和接口，成功才上传；报告保存在忽略的 `.local/live-smoke.json`，两次执行会覆盖该文件，需分别保留本地结果。还应按 [样例核对清单](tests/fixtures/README.md) 检查两页中文、章节和表格单元格；单个关键字命中不足以证明转换准确率。真实输出、耗时和 OCR 质量尚未取得时不得宣称通过。
+
+生成可复制的独立 Windows 源码部署包（不含 Python、uv、模型或离线依赖）：
 
 ~~~sh
-uv run python scripts/live_smoke.py
-# 对自备扫描 PDF，使用已知原文片段核对：
-uv run python scripts/live_smoke.py --pdf /path/to/scan.pdf --expect "已知原文"
-# 仓库内公开的两页文本/纯图像扫描样例（待网关适配后验收）：
-uv run python scripts/live_smoke.py --pdf tests/fixtures/live-text.pdf --expect "ORCHID-4827"
-uv run python scripts/live_smoke.py --pdf tests/fixtures/live-scan.pdf --expect "ORCHID-4827"
+uv run python scripts/package_gateway.py
 ~~~
 
-真实验收脚本先检查工作模式和接口，只有检查成功才上传文件。结果写入被忽略的 `.local/live-smoke.json`；失败或受阻不计为通过。
-
-2026-10-24 实测 `/openapi.json`、`/health` 均返回 HTTP 200，健康响应含 `workerAlive=true`。实际网关仅公开 `POST /convert/submit` 和 `GET /convert/task/{task_id}`；提交接口不带文件探测返回 HTTP 401 `invalid submit secret`。OpenAPI 没有描述上传请求和任务结果结构，网关应用版本 `0.1.0` 也不等于 MinerU 引擎版本。必须补充脱敏 `app.py` 路由与本机提交密钥配置，才能编写对应适配。当前未向网关提交 PDF，未取得真实输出。详见 [最新联调记录](docs/test-reports/2026-10-24-m2.md)。
+输出 `.local/pdf2markdown-gateway-windows.zip`；CI 也提供同名部署 artifact。包内仅有公开源码、锁文件、模板、Windows 脚本和哈希清单，不包含本地配置及运行数据。
 
 ## 本机启动
 
@@ -180,7 +179,7 @@ data/                    本地运行数据，不提交
 | 阶段 | 交付 | 验收 |
 | --- | --- | --- |
 | M1 基础闭环 | 已实现：工程、Mock、上传、持久化任务、编辑预览、基础分块、两种下载 | 离线单元及端到端验证，结果见阶段测试摘要 |
-| M2 MinerU 联调 | 已实现原生协议适配、结构化输出保存、超时/恢复和缓存；实际网关待核实 | 真实服务验收受阻，文本和扫描 PDF 尚未取得真实输出 |
+| M2 MinerU 联调 | 已实现原生适配、独立 19092 网关及 Windows 部署文件；目标 58666 待核实和新网关待部署 | 真实服务验收受阻，文本和扫描 PDF 尚未取得真实输出 |
 | M3 结构与分块 | 标题上下文、清洗、列表保护、表格转换、长表分块及续表复核 | 合成样例覆盖内容丢失、顺序、表头、页码和分隔符边界 |
 | M4 完整验收 | PDF 对照、编辑来源标记、重启恢复、回归、启动说明 | 本机浏览器完整流程通过，报告性能和已知限制 |
 

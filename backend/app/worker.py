@@ -63,6 +63,9 @@ def process_remote(store: Store, task, client_factory=MinerUClient):
                 raise
             state = status["status"]
             if state == "failed":
+                if status.get("error") == "submission_uncertain":
+                    store.submission(task["id"], True)
+                    raise MinerUError("submission_uncertain", "纯解析网关的上游提交结果不确定；请先由网关管理员核实并解除保护，再明确确认是否重新提交。")
                 raise MinerUError("upstream_task_failed", "MinerU 任务执行失败，请检查服务端日志后重试。")
             if state == "completed":
                 store.progress(task["id"], "下载解析结果", 80)

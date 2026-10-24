@@ -1,0 +1,14 @@
+[project]
+name = "pdf2markdown-pure-gateway"
+version = "0.1.0"
+description = "Isolated authenticated gateway to a loopback MinerU API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "python-multipart>=0.0.20,<1",
+  "python-dotenv>=1.0,<2",
+  "httpx>=0.28,<1",
+  "pypdf>=6,<7",
+  "filelock>=3.18,<4",
+]

@@ -110,7 +110,7 @@ class MinerUClient:
             style = "sync"
         if style is None:
             if has_operation("/convert/submit", "post") and has_operation("/convert/task/{task_id}", "get"):
-                raise MinerUError("unsupported_contract", "已连接自定义转换网关，但其 OpenAPI 未提供可适配的上传与结果契约；请核实 app.py 的提交认证、上传字段和任务结果格式。")
+                raise MinerUError("unsupported_contract", "已连接自定义转换网关，该接口包含既有业务处理；本工具请配置独立的 19092 纯解析网关。")
             raise MinerUError("unsupported_contract", "网关未公开可识别的 MinerU 3.x 接口，请核实 app.py 路由。")
         operation = paths["/tasks" if style == "async" else "/file_parse"]["post"]
         request = resolve_ref(schema, operation.get("requestBody", {}))
@@ -121,7 +121,8 @@ class MinerUClient:
             raise MinerUError("invalid_contract", "接口字段定义无效。")
         files = resolve_ref(schema, fields.get("files", {}))
         item = resolve_ref(schema, files.get("items", {}))
-        if files.get("type") != "array" or item.get("format") != "binary":
+        binary = item.get("type") == "string" and (item.get("format") == "binary" or item.get("contentMediaType") == "application/octet-stream")
+        if files.get("type") != "array" or not binary:
             raise MinerUError("unsupported_contract", "网关的文件上传字段与 MinerU 3.1.1 的 files[] 契约不同。")
         required_fields = {"return_md", "return_middle_json", "return_content_list", "response_format_zip"}
         if not required_fields.issubset(fields):
